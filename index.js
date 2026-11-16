@@ -533,69 +533,115 @@ app.put("/applications/:id", verifyToken, authorize("recruiter", "admin"), async
   }
 });
 
+// ----------------- Payment Helper (Reused by POST /payment & Webhook) -----------------
+export async function recordPaymentAndUpgradeUser(session, fallbackUserId = null) {
+  const customerEmail = session.customer_email || session.customer_details?.email;
+  const userId = session.metadata?.userId || fallbackUserId;
+  const sessionId = session.id;
+
+  // 1. Insert payment record (handle potential duplicate key gracefully)
+  const existingPayment = await paymentCollection.findOne({ sessionId });
+  if (!existingPayment) {
+    try {
+      await paymentCollection.insertOne({
+        sessionId,
+        status: session.status,
+        payment_status: session.payment_status,
+        customer_email: customerEmail || null,
+        userId: userId || null,
+        payment_intent: session.payment_intent,
+        premium: true,
+        plan: "Hireloop Pro",
+        amount: session.amount_total ? session.amount_total / 100 : 20.0,
+        currency: session.currency || "usd",
+        payment_date: new Date(),
+      });
+    } catch (insertErr) {
+      if (insertErr.code !== 11000) {
+        throw insertErr;
+      }
+    }
+  }
+
+  // 2. Mark user as premium in database (no $or needed)
+  let updated = false;
+  if (userId) {
+    if (ObjectId.isValid(userId)) {
+      const res = await users.updateOne(
+        { _id: new ObjectId(userId) },
+        { $set: { premium: true, updatedAt: new Date() } }
+      );
+      if (res.matchedCount > 0) updated = true;
+    }
+    if (!updated) {
+      const res = await users.updateOne(
+        { id: userId },
+        { $set: { premium: true, updatedAt: new Date() } }
+      );
+      if (res.matchedCount > 0) updated = true;
+    }
+  }
+  if (!updated && customerEmail) {
+    await users.updateOne(
+      { email: { $regex: new RegExp(`^${customerEmail}$`, "i") } },
+      { $set: { premium: true, updatedAt: new Date() } }
+    );
+  }
+
+  return { success: true };
+}
+
 // ----------------- Stripe Payment Verification -----------------
-app.post("/payment", async (req, res) => {
+app.post("/payment", verifyToken, async (req, res) => {
   try {
     const { sessionId } = req.body;
     if (!sessionId) {
-      return res
-        .status(400)
-        .send({ success: false, message: "Missing sessionId" });
+      return res.status(400).json({ success: false, message: "Missing sessionId" });
     }
 
-    // Retrieve checkout session from Stripe
+    // 1. Idempotency check: if payment already recorded, exit early
+    const existingPayment = await paymentCollection.findOne({ sessionId });
+    if (existingPayment) {
+      return res.json({ success: true, message: "Payment already verified" });
+    }
+
+    // 2. Retrieve session from Stripe
     const session = await stripe.checkout.sessions.retrieve(sessionId);
-    const { status, payment_status, customer_email, metadata, payment_intent } =
-      session;
+    const isPaid = session.status === "complete" || session.payment_status === "paid";
 
-    if (status === "complete" || payment_status === "paid") {
-      const email = customer_email || session?.customer_details?.email;
-      const userId = metadata?.userId;
+    if (!isPaid) {
+      return res.status(400).json({ success: false, message: "Payment not completed" });
+    }
 
-      // 1. Insert payment record if not already recorded
-      const existingPayment = await paymentCollection.findOne({ sessionId });
-      if (!existingPayment) {
-        await paymentCollection.insertOne({
-          sessionId,
-          status,
-          payment_status,
-          customer_email: email || null,
-          userId: userId || null,
-          payment_intent,
-          premium: true,
-          plan: "Hireloop Pro",
-          amount: 20.0,
-          currency: "usd",
-          payment_date: new Date(),
-        });
-      }
+    // 3. Verify Stripe session belongs to authenticated user (case-insensitive email)
+    const customerEmail = session.customer_email || session.customer_details?.email;
+    const metadataUserId = session.metadata?.userId;
+    const authUserId = req.user._id?.toString() || req.user.id;
 
-      // 2. Mark user as premium in database
-      const userConditions = [];
-      if (userId && userId !== "undefined") {
-        if (ObjectId.isValid(userId))
-          userConditions.push({ _id: new ObjectId(userId) });
-        userConditions.push({ _id: userId }, { id: userId });
-      }
-      if (email) userConditions.push({ email });
+    const emailMatches =
+      customerEmail &&
+      req.user.email &&
+      customerEmail.toLowerCase() === req.user.email.toLowerCase();
+    const idMatches = metadataUserId && metadataUserId === authUserId;
 
-      if (userConditions.length > 0) {
-        await users.updateOne(
-          { $or: userConditions },
-          { $set: { premium: true } },
-        );
-      }
-
-      return res.send({
-        success: true,
-        message: "Payment verified successfully",
+    if (!emailMatches && !idMatches) {
+      return res.status(403).json({
+        success: false,
+        message: "Forbidden: Stripe session does not belong to your account",
       });
     }
 
-    res.send({ success: false, message: "Payment not completed" });
+    // 4. Record payment and upgrade user via reusable helper
+    await recordPaymentAndUpgradeUser(session, authUserId);
+
+    return res.json({ success: true, message: "Payment verified successfully" });
   } catch (error) {
+    // Treat duplicate-key error (11000) as already verified
+    if (error.code === 11000) {
+      return res.json({ success: true, message: "Payment already verified" });
+    }
     console.error("Payment error:", error);
-    res.status(500).send({ success: false, message: error.message });
+    res.status(500).json({ success: false, message: error.message });
   }
 });
 
