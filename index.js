@@ -158,13 +158,29 @@ app.patch("/users/:id", verifyToken, authorize("admin"), async (req, res) => {
   try {
     const { id } = req.params;
     const { role } = req.body;
+
+    // 1. Whitelist allowed user roles
+    const VALID_ROLES = ["seeker", "recruiter", "admin"];
+    if (!role || !VALID_ROLES.includes(role)) {
+      return res.status(400).json({
+        error: `Invalid role. Allowed roles: ${VALID_ROLES.join(", ")}`,
+      });
+    }
+
+    // 2. Prevent admin from demoting their own account
+    const currentAdminId = req.user?._id?.toString() || req.user?.id;
+    if (currentAdminId === id && role !== "admin") {
+      return res.status(400).json({ error: "Admins cannot demote their own account" });
+    }
+
     const filter = ObjectId.isValid(id) ? { _id: new ObjectId(id) } : { _id: id };
     const result = await users.updateOne(filter, {
       $set: { role, updatedAt: new Date() },
     });
-    res.send(result);
+
+    res.json(result);
   } catch (error) {
-    res.status(500).send({ message: "Failed to update user", error: error.message });
+    res.status(500).json({ message: "Failed to update user", error: error.message });
   }
 });
 
