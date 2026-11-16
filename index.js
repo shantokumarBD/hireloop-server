@@ -14,6 +14,42 @@ app.use(
     credentials: true,
   })
 );
+// Stripe Webhook Endpoint (MUST be before express.json() to preserve raw body buffer for signature verification)
+app.post(
+  "/webhook/stripe",
+  express.raw({ type: "application/json" }),
+  async (req, res) => {
+    const sig = req.headers["stripe-signature"];
+    const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
+
+    if (!endpointSecret) {
+      console.error("STRIPE_WEBHOOK_SECRET is not configured in .env");
+      return res.status(500).json({ error: "Webhook secret not configured" });
+    }
+
+    let event;
+    try {
+      event = stripe.webhooks.constructEvent(req.body, sig, endpointSecret);
+    } catch (err) {
+      console.error("Webhook signature verification failed:", err.message);
+      return res.status(400).send(`Webhook Error: ${err.message}`);
+    }
+
+    if (event.type === "checkout.session.completed") {
+      const session = event.data.object;
+      try {
+        await recordPaymentAndUpgradeUser(session);
+        console.log(`Successfully processed webhook for session: ${session.id}`);
+      } catch (err) {
+        console.error("Error processing checkout.session.completed:", err);
+        return res.status(500).json({ error: "Failed to process payment" });
+      }
+    }
+
+    res.json({ received: true });
+  }
+);
+
 app.use(express.json());
 
 // MongoDB Connection
