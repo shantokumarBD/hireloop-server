@@ -149,12 +149,12 @@ app.get("/", (req, res) => {
   res.send("Hireloop server is running");
 });
 
-app.get("/user", async (req, res) => {
-  const result = await users.find({}).toArray();
+app.get("/users", verifyToken, authorize("admin"), async (req, res) => {
+  const result = await users.find({}).sort({ _id: -1 }).toArray();
   res.send(result);
 });
 
-app.patch(["/user/:id", "/users/:id"], async (req, res) => {
+app.patch("/users/:id", verifyToken, authorize("admin"), async (req, res) => {
   try {
     const { id } = req.params;
     const { role } = req.body;
@@ -169,7 +169,7 @@ app.patch(["/user/:id", "/users/:id"], async (req, res) => {
 });
 
 // Check single user premium status
-app.get(["/user/:id/premium", "/users/:id/premium"], async (req, res) => {
+app.get("/users/:id/premium", async (req, res) => {
   try {
     const isPremium = await isUserPremium(req.params.id, req.query.email);
     res.send({ success: true, premium: isPremium });
@@ -211,29 +211,50 @@ app.get("/jobs/:id", async (req, res) => {
   res.send(result);
 });
 
-app.post("/jobs", async (req, res) => {
-  const result = await jobsCollection.insertOne(req.body);
-  res.send(result);
+app.post("/jobs", verifyToken, authorize("recruiter"), async (req, res) => {
+  try {
+    const jobData = {
+      ...req.body,
+      recruiterEmail: req.user.email,
+      recruiterId: req.user._id?.toString() || req.user.id || req.body.recruiterId,
+    };
+    const result = await jobsCollection.insertOne(jobData);
+    res.send(result);
+  } catch (error) {
+    res.status(500).send({ message: "Failed to create job", error: error.message });
+  }
 });
 
-app.put("/jobs/:id", async (req, res) => {
-  const { id } = req.params;
-  const filter = ObjectId.isValid(id) ? { _id: new ObjectId(id) } : { _id: id };
-  const result = await jobsCollection.updateOne(filter, { $set: req.body });
-  res.send(result);
+app.put("/jobs/:id", verifyToken, authorize("recruiter"), checkJobOwnership, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const filter = ObjectId.isValid(id) ? { _id: new ObjectId(id) } : { _id: id };
+    const result = await jobsCollection.updateOne(filter, { $set: req.body });
+    res.send(result);
+  } catch (error) {
+    res.status(500).send({ message: "Failed to update job", error: error.message });
+  }
 });
 
-app.delete("/jobs/:id", async (req, res) => {
-  const { id } = req.params;
-  const query = ObjectId.isValid(id) ? { _id: new ObjectId(id) } : { _id: id };
-  const result = await jobsCollection.deleteOne(query);
-  res.send(result);
+app.delete("/jobs/:id", verifyToken, authorize("recruiter"), checkJobOwnership, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const query = ObjectId.isValid(id) ? { _id: new ObjectId(id) } : { _id: id };
+    const result = await jobsCollection.deleteOne(query);
+    res.send(result);
+  } catch (error) {
+    res.status(500).send({ message: "Failed to delete job", error: error.message });
+  }
 });
 
 // ----------------- Applications Routes -----------------
-app.post("/applications", async (req, res) => {
+app.post("/applications", verifyToken, authorize("seeker"), async (req, res) => {
   try {
-    const application = req.body;
+    const application = {
+      ...req.body,
+      userId: req.user._id?.toString() || req.user.id || req.body.userId,
+      seekerEmail: req.user.email || req.body.seekerEmail,
+    };
     const { userId, seekerEmail: email, jobId } = application;
 
     const seekerConditions = [];
@@ -357,13 +378,17 @@ app.get("/applications", verifyToken, checkJobOwnership, async (req, res) => {
   }
 });
 
-app.put("/applications/:id", async (req, res) => {
-  const { id } = req.params;
-  const filter = ObjectId.isValid(id) ? { _id: new ObjectId(id) } : { _id: id };
-  const result = await applicationsCollection.updateOne(filter, {
-    $set: req.body,
-  });
-  res.send(result);
+app.put("/applications/:id", verifyToken, authorize("recruiter"), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const filter = ObjectId.isValid(id) ? { _id: new ObjectId(id) } : { _id: id };
+    const result = await applicationsCollection.updateOne(filter, {
+      $set: req.body,
+    });
+    res.send(result);
+  } catch (error) {
+    res.status(500).send({ message: "Failed to update application", error: error.message });
+  }
 });
 
 // ----------------- Stripe Payment Verification -----------------
