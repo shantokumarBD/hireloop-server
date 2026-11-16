@@ -31,6 +31,21 @@ const jobsCollection = database.collection("jobs");
 const applicationsCollection = database.collection("applications");
 const paymentCollection = database.collection("payments");
 
+// Initialize unique indexes for data integrity
+try {
+  await applicationsCollection.createIndex(
+    { jobId: 1, seekerEmail: 1 },
+    { unique: true }
+  );
+  await paymentCollection.createIndex(
+    { sessionId: 1 },
+    { unique: true }
+  );
+  console.log("Unique indexes initialized successfully!");
+} catch (err) {
+  console.error("Warning: Failed to initialize unique index:", err.message);
+}
+
 // Helper: Check if a user has active premium status (from user doc or payment history)
 async function isUserPremium(userId, email) {
   try {
@@ -401,7 +416,7 @@ app.post("/applications", verifyToken, authorize("seeker"), async (req, res) => 
       seekerEmail,
     });
     if (alreadyApplied) {
-      return res.status(400).json({
+      return res.status(409).json({
         success: false,
         alreadyApplied: true,
         error: "ALREADY_APPLIED",
@@ -412,6 +427,14 @@ app.post("/applications", verifyToken, authorize("seeker"), async (req, res) => 
     const result = await applicationsCollection.insertOne(application);
     res.json(result);
   } catch (error) {
+    if (error.code === 11000) {
+      return res.status(409).json({
+        success: false,
+        alreadyApplied: true,
+        error: "ALREADY_APPLIED",
+        message: "You have already applied for this job.",
+      });
+    }
     console.error("Error creating application:", error);
     res.status(500).json({ success: false, error: "Failed to submit application" });
   }
