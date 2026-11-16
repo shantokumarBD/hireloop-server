@@ -378,16 +378,65 @@ app.get("/applications", verifyToken, checkJobOwnership, async (req, res) => {
   }
 });
 
-app.put("/applications/:id", verifyToken, authorize("recruiter"), async (req, res) => {
+app.put("/applications/:id", verifyToken, authorize("recruiter", "admin"), async (req, res) => {
   try {
     const { id } = req.params;
-    const filter = ObjectId.isValid(id) ? { _id: new ObjectId(id) } : { _id: id };
-    const result = await applicationsCollection.updateOne(filter, {
-      $set: req.body,
+    const { status } = req.body;
+
+    // 1. Whitelist valid application statuses
+    const VALID_APPLICATION_STATUSES = [
+      "Applied",
+      "Review",
+      "Shortlisted",
+      "Interview",
+      "Offered",
+      "Rejected",
+    ];
+    if (!status || !VALID_APPLICATION_STATUSES.includes(status)) {
+      return res.status(400).json({
+        error: `Invalid status. Allowed statuses: ${VALID_APPLICATION_STATUSES.join(", ")}`,
+      });
+    }
+
+    // 2. Fetch the target application
+    const applicationQuery = ObjectId.isValid(id) ? { _id: new ObjectId(id) } : { _id: id };
+    const application = await applicationsCollection.findOne(applicationQuery);
+    if (!application) {
+      return res.status(404).json({ error: "Application not found" });
+    }
+
+    // 3. Ownership check: verify recruiter owns the associated job (admin is allowed)
+    if (req.user?.role !== "admin") {
+      const jobQuery = ObjectId.isValid(application.jobId)
+        ? { _id: new ObjectId(application.jobId) }
+        : { _id: application.jobId };
+      const job = await jobsCollection.findOne(jobQuery);
+
+      if (!job) {
+        return res.status(404).json({ error: "Associated job not found" });
+      }
+
+      const userId = req.user?._id?.toString() || req.user?.id;
+      const isOwner =
+        job.recruiterEmail?.toLowerCase() === req.user?.email?.toLowerCase() ||
+        job.recruiterId === userId;
+
+      if (!isOwner) {
+        return res.status(403).json({ error: "Forbidden: You do not own the job for this application" });
+      }
+    }
+
+    // 4. Update ONLY status and updatedAt (no mass-assignment via req.body)
+    const result = await applicationsCollection.updateOne(applicationQuery, {
+      $set: {
+        status,
+        updatedAt: new Date(),
+      },
     });
-    res.send(result);
+
+    res.json(result);
   } catch (error) {
-    res.status(500).send({ message: "Failed to update application", error: error.message });
+    res.status(500).json({ message: "Failed to update application", error: error.message });
   }
 });
 
