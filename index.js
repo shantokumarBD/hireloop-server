@@ -185,14 +185,29 @@ app.patch("/users/:id", verifyToken, authorize("admin"), async (req, res) => {
 });
 
 // Check single user premium status
-app.get("/users/:id/premium", async (req, res) => {
+app.get("/users/:id/premium", verifyToken, async (req, res) => {
   try {
-    const isPremium = await isUserPremium(req.params.id, req.query.email);
-    res.send({ success: true, premium: isPremium });
+    const targetUserId = req.params.id === "me" ? (req.user._id?.toString() || req.user.id) : req.params.id;
+    const targetEmail = req.query.email || req.user.email;
+
+    // Regular users can only check their own status; admin can check any
+    if (req.user?.role !== "admin") {
+      const isSelf =
+        targetEmail.toLowerCase() === req.user.email.toLowerCase() ||
+        targetUserId === (req.user._id?.toString() || req.user.id);
+      if (!isSelf) {
+        return res.status(403).json({
+          success: false,
+          premium: false,
+          error: "Forbidden: Cannot view other users' premium status",
+        });
+      }
+    }
+
+    const isPremium = req.user.premium === true || (await isUserPremium(targetUserId, targetEmail));
+    res.json({ success: true, premium: isPremium });
   } catch (error) {
-    res
-      .status(500)
-      .send({ success: false, premium: false, error: error.message });
+    res.status(500).json({ success: false, premium: false, error: error.message });
   }
 });
 
@@ -402,32 +417,14 @@ app.post("/applications", verifyToken, authorize("seeker"), async (req, res) => 
   }
 });
 
-app.get("/applications/count", async (req, res) => {
+app.get("/applications/count", verifyToken, async (req, res) => {
   try {
-    const { userId, email } = req.query;
-    const seekerConditions = [];
+    const seekerEmail = req.user.email;
+    const userId = req.user._id?.toString() || req.user.id;
+    const isPremium = req.user.premium === true || (await isUserPremium(userId, seekerEmail));
 
-    if (userId && userId !== "undefined") {
-      if (ObjectId.isValid(userId))
-        seekerConditions.push({ userId: new ObjectId(userId) });
-      seekerConditions.push({ userId });
-    }
-    if (email && email !== "undefined")
-      seekerConditions.push({ seekerEmail: email });
-
-    if (seekerConditions.length === 0) {
-      return res.json({
-        count: 0,
-        limit: 3,
-        limitReached: false,
-        remaining: 3,
-      });
-    }
-
-    const isPremium = await isUserPremium(userId, email);
-    const count = await applicationsCollection.countDocuments({
-      $or: seekerConditions,
-    });
+    // Direct count by authenticated seeker's email (no $or needed)
+    const count = await applicationsCollection.countDocuments({ seekerEmail });
 
     res.json({
       count,
@@ -438,9 +435,7 @@ app.get("/applications/count", async (req, res) => {
     });
   } catch (error) {
     console.error("Error getting applications count:", error);
-    res
-      .status(500)
-      .json({ count: 0, limit: 3, limitReached: false, remaining: 3 });
+    res.status(500).json({ count: 0, limit: 3, limitReached: false, remaining: 3 });
   }
 });
 
