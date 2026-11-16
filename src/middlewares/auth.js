@@ -73,6 +73,11 @@ export const verifyToken = async (req, res, next) => {
       : { id: session.userId };
 
     req.user = await users.findOne(query);
+
+    if (!req.user) {
+      return res.status(401).send({ error: "User not found" });
+    }
+
     next();
   } catch (error) {
     return res.status(401).send({ error: "Unauthorized" });
