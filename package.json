@@ -5,6 +5,7 @@
   "main": "index.js",
   "scripts": {
     "test": "node scripts/smoke-test.js",
+    "test:security": "node --env-file=.env scripts/run-13-security-tests.mjs",
     "start": "nodemon index.js",
     "seed": "node seed.js"
   },
