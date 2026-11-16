@@ -364,17 +364,22 @@ app.get("/applications", verifyToken, checkJobOwnership, async (req, res) => {
     // 1. Seeker: only see their own applications
     if (req.user?.role === "seeker") {
       query.seekerEmail = req.user.email;
-    } 
-    // 2. Recruiter / Admin with jobId: simple direct match without $in
+    }
+    // 2. Specific jobId requested
     else if (jobId && jobId !== "undefined") {
       query.jobId = jobId;
     }
+    // 3. Recruiter without jobId: rejected to prevent cross-company data leaks
+    else if (req.user?.role === "recruiter") {
+      return res.status(400).json({ error: "jobId query parameter is required for recruiters" });
+    }
+    // 4. Admin without jobId: allowed to see all applications (query remains {})
 
     const result = await applicationsCollection.find(query).toArray();
-    res.send(result);
+    res.json(result);
   } catch (error) {
     console.error("Error fetching applications:", error);
-    res.status(500).send({ message: "Failed to fetch applications", error: error.message });
+    res.status(500).json({ message: "Failed to fetch applications", error: error.message });
   }
 });
 
