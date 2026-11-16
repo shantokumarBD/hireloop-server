@@ -213,15 +213,43 @@ app.get("/jobs/:id", async (req, res) => {
 
 app.post("/jobs", verifyToken, authorize("recruiter"), async (req, res) => {
   try {
-    const jobData = {
-      ...req.body,
-      recruiterEmail: req.user.email,
-      recruiterId: req.user._id?.toString() || req.user.id || req.body.recruiterId,
-    };
+    // 1. Allowed fields whitelist for creating a job
+    const ALLOWED_JOB_FIELDS = [
+      "title",
+      "companyName",
+      "companyLogo",
+      "category",
+      "jobType",
+      "type",
+      "isRemote",
+      "location",
+      "salaryMin",
+      "salaryMax",
+      "salaryFrequency",
+      "currency",
+      "responsibilities",
+      "requirements",
+      "deadline",
+    ];
+
+    const jobData = {};
+    for (const field of ALLOWED_JOB_FIELDS) {
+      if (req.body[field] !== undefined) {
+        jobData[field] = req.body[field];
+      }
+    }
+
+    // 2. Enforce server-controlled identity, status, and timestamps
+    jobData.recruiterEmail = req.user.email;
+    jobData.recruiterId = req.user._id?.toString() || req.user.id;
+    jobData.status = "Active";
+    jobData.applicantsCount = 0;
+    jobData.createdAt = new Date().toISOString();
+
     const result = await jobsCollection.insertOne(jobData);
-    res.send(result);
+    res.json(result);
   } catch (error) {
-    res.status(500).send({ message: "Failed to create job", error: error.message });
+    res.status(500).json({ message: "Failed to create job", error: error.message });
   }
 });
 
@@ -279,67 +307,82 @@ app.delete("/jobs/:id", verifyToken, authorize("recruiter"), checkJobOwnership, 
 // ----------------- Applications Routes -----------------
 app.post("/applications", verifyToken, authorize("seeker"), async (req, res) => {
   try {
-    const application = {
-      ...req.body,
-      userId: req.user._id?.toString() || req.user.id || req.body.userId,
-      seekerEmail: req.user.email || req.body.seekerEmail,
-    };
-    const { userId, seekerEmail: email, jobId } = application;
-
-    const seekerConditions = [];
-    if (userId && userId !== "undefined") {
-      if (ObjectId.isValid(userId))
-        seekerConditions.push({ userId: new ObjectId(userId) });
-      seekerConditions.push({ userId });
+    const { jobId } = req.body;
+    if (!jobId) {
+      return res.status(400).json({ success: false, error: "jobId is required" });
     }
-    if (email && email !== "undefined")
-      seekerConditions.push({ seekerEmail: email });
 
-    if (seekerConditions.length > 0) {
-      const isPremium = await isUserPremium(userId, email);
+    // 1. Whitelist allowed application fields
+    const ALLOWED_APPLICATION_FIELDS = [
+      "jobId",
+      "jobTitle",
+      "companyName",
+      "companyLogo",
+      "category",
+      "jobType",
+      "isRemote",
+      "location",
+      "salaryMin",
+      "salaryMax",
+      "salaryFrequency",
+      "seekerName",
+      "seekerPhone",
+      "resumeUrl",
+      "coverLetter",
+    ];
 
-      // Limit of 3 free applications for non-premium users
-      if (!isPremium) {
-        const count = await applicationsCollection.countDocuments({
-          $or: seekerConditions,
-        });
-        if (count >= 3) {
-          return res.status(403).json({
-            success: false,
-            limitReached: true,
-            count,
-            error: "APPLICATION_LIMIT_REACHED",
-            message:
-              "You have reached the maximum limit of 3 free applications. Please upgrade to Pro.",
-            redirectUrl: "/dashboard/job-seeker/billing",
-          });
-        }
+    const application = {};
+    for (const field of ALLOWED_APPLICATION_FIELDS) {
+      if (req.body[field] !== undefined) {
+        application[field] = req.body[field];
       }
+    }
 
-      // Prevent duplicate application for the same job
-      if (jobId) {
-        const alreadyApplied = await applicationsCollection.findOne({
-          jobId,
-          $or: seekerConditions,
+    // 2. Enforce server-controlled identity and initial status
+    const seekerEmail = req.user.email;
+    const userId = req.user._id?.toString() || req.user.id;
+
+    application.seekerEmail = seekerEmail;
+    application.userId = userId;
+    application.status = "Applied";
+    application.appliedAt = new Date().toISOString();
+
+    // 3. Premium and quota check (3 free applications for non-premium, no $or)
+    const isPremium = req.user.premium === true || (await isUserPremium(userId, seekerEmail));
+
+    if (!isPremium) {
+      const count = await applicationsCollection.countDocuments({ seekerEmail });
+      if (count >= 3) {
+        return res.status(403).json({
+          success: false,
+          limitReached: true,
+          count,
+          error: "APPLICATION_LIMIT_REACHED",
+          message: "You have reached the maximum limit of 3 free applications. Please upgrade to Pro.",
+          redirectUrl: "/dashboard/job-seeker/billing",
         });
-        if (alreadyApplied) {
-          return res.status(400).json({
-            success: false,
-            alreadyApplied: true,
-            error: "ALREADY_APPLIED",
-            message: "You have already applied for this job.",
-          });
-        }
       }
+    }
+
+    // 4. Prevent duplicate application for the same job (no $or)
+    const alreadyApplied = await applicationsCollection.findOne({
+      jobId,
+      seekerEmail,
+    });
+    if (alreadyApplied) {
+      return res.status(400).json({
+        success: false,
+        alreadyApplied: true,
+        error: "ALREADY_APPLIED",
+        message: "You have already applied for this job.",
+      });
     }
 
     const result = await applicationsCollection.insertOne(application);
-    res.send(result);
+    res.json(result);
   } catch (error) {
     console.error("Error creating application:", error);
-    res
-      .status(500)
-      .json({ success: false, error: "Failed to submit application" });
+    res.status(500).json({ success: false, error: "Failed to submit application" });
   }
 });
 
