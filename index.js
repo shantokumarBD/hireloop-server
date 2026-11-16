@@ -52,35 +52,16 @@ app.post(
 
 app.use(express.json());
 
-// MongoDB Connection
-const client = new MongoClient(
-  `mongodb://${process.env.MONGODB_USER}:${process.env.MONGODB_PASS}@ac-znydxya-shard-00-00.9qadqxy.mongodb.net:27017,ac-znydxya-shard-00-01.9qadqxy.mongodb.net:27017,ac-znydxya-shard-00-02.9qadqxy.mongodb.net:27017/?ssl=true&replicaSet=atlas-119fez-shard-0&authSource=admin`,
-);
-
-await client.connect();
-console.log("Successfully connected to MongoDB!");
-
-const database = client.db("hireloop");
-const users = database.collection("user");
-const sessions = database.collection("session");
-const jobsCollection = database.collection("jobs");
-const applicationsCollection = database.collection("applications");
-const paymentCollection = database.collection("payments");
-
-// Initialize unique indexes for data integrity
-try {
-  await applicationsCollection.createIndex(
-    { jobId: 1, seekerEmail: 1 },
-    { unique: true }
-  );
-  await paymentCollection.createIndex(
-    { sessionId: 1 },
-    { unique: true }
-  );
-  console.log("Unique indexes initialized successfully!");
-} catch (err) {
-  console.error("Warning: Failed to initialize unique index:", err.message);
-}
+// MongoDB Database & Collections Configuration
+import {
+  client,
+  database,
+  users,
+  sessions,
+  jobsCollection,
+  applicationsCollection,
+  paymentCollection,
+} from "./src/config/db.js";
 
 // Helper: Check if a user has active premium status (from user doc or payment history)
 async function isUserPremium(userId, email) {
