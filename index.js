@@ -225,14 +225,43 @@ app.post("/jobs", verifyToken, authorize("recruiter"), async (req, res) => {
   }
 });
 
-app.put("/jobs/:id", verifyToken, authorize("recruiter"), checkJobOwnership, async (req, res) => {
+app.put("/jobs/:id", verifyToken, authorize("recruiter", "admin"), checkJobOwnership, async (req, res) => {
   try {
     const { id } = req.params;
     const filter = ObjectId.isValid(id) ? { _id: new ObjectId(id) } : { _id: id };
-    const result = await jobsCollection.updateOne(filter, { $set: req.body });
-    res.send(result);
+
+    // Allowed fields whitelist using simple array and for-loop
+    const ALLOWED_JOB_FIELDS = [
+      "title",
+      "companyName",
+      "companyLogo",
+      "category",
+      "jobType",
+      "type",
+      "isRemote",
+      "location",
+      "salaryMin",
+      "salaryMax",
+      "salaryFrequency",
+      "currency",
+      "responsibilities",
+      "requirements",
+      "deadline",
+      "status",
+    ];
+
+    const updateData = {};
+    for (const field of ALLOWED_JOB_FIELDS) {
+      if (req.body[field] !== undefined) {
+        updateData[field] = req.body[field];
+      }
+    }
+    updateData.updatedAt = new Date();
+
+    const result = await jobsCollection.updateOne(filter, { $set: updateData });
+    res.json(result);
   } catch (error) {
-    res.status(500).send({ message: "Failed to update job", error: error.message });
+    res.status(500).json({ message: "Failed to update job", error: error.message });
   }
 });
 
