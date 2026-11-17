@@ -10,11 +10,22 @@ import {
   authorize,
   checkJobOwnership,
 } from "../middlewares/auth.js";
+import { validateBody } from "../middlewares/validate.js";
+import {
+  createApplicationSchema,
+  updateApplicationStatusSchema,
+} from "../schemas/applicationSchemas.js";
 
 const router = express.Router();
 
 // Submit job application (Seeker only)
-router.post("/", verifyToken, authorize("seeker"), createApplication);
+router.post(
+  "/",
+  verifyToken,
+  authorize("seeker"),
+  validateBody(createApplicationSchema),
+  createApplication
+);
 
 // Quota and count check (Auth protected)
 router.get("/count", verifyToken, getApplicationCount);
@@ -27,6 +38,7 @@ router.put(
   "/:id",
   verifyToken,
   authorize("recruiter", "admin"),
+  validateBody(updateApplicationStatusSchema),
   updateApplicationStatus
 );
 
